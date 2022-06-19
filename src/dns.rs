@@ -1,5 +1,5 @@
 use std::{
-    io::{Read, Seek},
+    io::{Read, Seek, Write},
     net::Ipv4Addr,
 };
 type Error = Box<dyn std::error::Error>;
@@ -85,7 +85,7 @@ impl DnsHeader {
         }
     }
 
-    pub fn read<R: Read + Seek>(&mut self, buffer: &mut packet::PacketBufReader<R>) -> Result<()> {
+    pub fn read<R: Read + Seek>(&mut self, buffer: &mut packet::PacketReader<R>) -> Result<()> {
         self.id = buffer.read_u16()?;
 
         let flags = buffer.read_u16()?;
@@ -108,6 +108,32 @@ impl DnsHeader {
         self.ns_count = buffer.read_u16()?;
         self.ar_count = buffer.read_u16()?;
 
+        Ok(())
+    }
+
+    pub fn write<W: Write>(&mut self, buffer: &mut packet::PacketWriter<W>) -> Result<()> {
+        buffer.write_u16(self.id)?;
+
+        buffer.write_u8(
+            (self.rd as u8)
+                | ((self.tc as u8) << 1)
+                | ((self.aa as u8) << 2)
+                | (self.opcode << 3)
+                | ((self.qr as u8) << 7) as u8,
+        )?;
+
+        buffer.write_u8(
+            (self.rcode as u8)
+                | ((self.cd as u8) << 4)
+                | ((self.ad as u8) << 5)
+                | ((self.z as u8) << 6)
+                | ((self.ra as u8) << 7),
+        )?;
+
+        buffer.write_u16(self.qd_count)?;
+        buffer.write_u16(self.an_count)?;
+        buffer.write_u16(self.ns_count)?;
+        buffer.write_u16(self.ar_count)?;
         Ok(())
     }
 }
@@ -156,11 +182,18 @@ impl DnsQuestion {
         }
     }
 
-    pub fn read<R: Read + Seek>(&mut self, buffer: &mut packet::PacketBufReader<R>) -> Result<()> {
+    pub fn read<R: Read + Seek>(&mut self, buffer: &mut packet::PacketReader<R>) -> Result<()> {
         self.name = buffer.read_name()?;
         self.qtype = QueryType::from_num(buffer.read_u16()?);
         self.qclass = buffer.read_u16()?;
 
+        Ok(())
+    }
+
+    pub fn write<W: Write>(&self, buffer: &mut packet::PacketWriter<W>) -> Result<()> {
+        buffer.write_name(&self.name)?;
+        buffer.write_u16(self.qtype.to_num())?;
+        buffer.write_u16(self.qclass)?;
         Ok(())
     }
 }
@@ -178,8 +211,7 @@ impl DnsQuestion {
 // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 // |                    RDATA                      |
 // +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub enum DnsRecord {
     UNKNOWN {
         domain: String,
@@ -194,7 +226,7 @@ pub enum DnsRecord {
     },
 }
 impl DnsRecord {
-    pub fn read<R: Read + Seek>(buffer: &mut packet::PacketBufReader<R>) -> Result<DnsRecord> {
+    pub fn read<R: Read + Seek>(buffer: &mut packet::PacketReader<R>) -> Result<DnsRecord> {
         let domain = buffer.read_name()?;
 
         let qtype_num = buffer.read_u16()?;
@@ -248,9 +280,7 @@ impl DnsPacket {
         }
     }
 
-    pub fn from_buffer<R: Read + Seek>(
-        buffer: &mut packet::PacketBufReader<R>,
-    ) -> Result<DnsPacket> {
+    pub fn from_buffer<R: Read + Seek>(buffer: &mut packet::PacketReader<R>) -> Result<DnsPacket> {
         let mut result = DnsPacket::new();
         result.header.read(buffer)?;
 
@@ -274,5 +304,19 @@ impl DnsPacket {
         }
 
         Ok(result)
+    }
+
+    pub fn write<W: Write>(&mut self, buffer: &mut packet::PacketWriter<W>) -> Result<()> {
+        self.header.qd_count = self.questions.len() as u16;
+        self.header.an_count = self.answers.len() as u16;
+        self.header.ar_count = self.resources.len() as u16;
+        self.header.ns_count = self.authorities.len() as u16;
+        self.header.write(buffer)?;
+
+        for question in &self.questions {
+            question.write(buffer)?;
+        }
+
+        Ok(())
     }
 }

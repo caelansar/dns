@@ -1,14 +1,14 @@
-use byteorder::{BigEndian, ReadBytesExt};
-use std::io::{Read, Seek, SeekFrom};
+use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
+use std::io::{Read, Seek, SeekFrom, Write};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
-pub struct PacketBufReader<R: Read> {
+pub struct PacketReader<R: Read> {
     pub read: R,
 }
 
-impl<R: Read + Seek> PacketBufReader<R> {
+impl<R: Read + Seek> PacketReader<R> {
     pub fn new(r: R) -> Self {
         Self { read: r }
     }
@@ -89,10 +89,41 @@ impl<R: Read + Seek> PacketBufReader<R> {
     }
 }
 
+pub struct PacketWriter<W: Write> {
+    pub write: W,
+}
+
+impl<W: Write> PacketWriter<W> {
+    pub fn new(w: W) -> Self {
+        Self { write: w }
+    }
+
+    pub fn write_u8(&mut self, val: u8) -> Result<()> {
+        self.write.write_u8(val)?;
+
+        Ok(())
+    }
+
+    pub fn write_u16(&mut self, val: u16) -> Result<()> {
+        self.write.write_u16::<BigEndian>(val)?;
+
+        Ok(())
+    }
+
+    pub fn write_name(&mut self, name: &String) -> Result<()> {
+        for part in name.split(".") {
+            self.write.write_u8(part.len() as u8)?;
+            self.write.write(part.as_bytes())?;
+        }
+        self.write.write_u8(0)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{PacketReader, PacketWriter};
     use std::io::{BufRead, Cursor, Read};
-    use super::PacketBufReader;
 
     #[test]
     fn packet_buffer_reader() {
@@ -103,7 +134,7 @@ mod tests {
             0x94, 0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb2, 0x00, 0x04, 0xdc,
             0xb5, 0x26, 0xfb,
         ];
-        let mut pr = PacketBufReader {
+        let mut pr = PacketReader {
             read: Cursor::new(data),
         };
 
@@ -123,5 +154,15 @@ mod tests {
 
         let s = pr.read_name().unwrap();
         println!("name {}", s);
+    }
+
+    #[test]
+    fn packet_write() {
+        let mut v = vec![0; 10];
+        let w = Cursor::new(&mut v);
+        let domain_name = "baidu.com";
+        let mut pw = PacketWriter { write: w };
+        pw.write_name(&domain_name.to_string()).unwrap();
+        assert_eq!(&vec![5, 98, 97, 105, 100, 117, 3, 99, 111, 109, 0], &v);
     }
 }
