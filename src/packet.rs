@@ -1,10 +1,10 @@
-use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
-pub struct PacketReader<R: Read> {
+pub struct PacketReader<R> {
     pub read: R,
 }
 
@@ -123,7 +123,7 @@ impl<W: Write> PacketWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::{PacketReader, PacketWriter};
-    use std::io::{BufRead, Cursor, Read};
+    use std::io::{BufReader, Cursor, Read, Seek};
 
     #[test]
     fn packet_buffer_reader() {
@@ -135,7 +135,7 @@ mod tests {
             0xb5, 0x26, 0xfb,
         ];
         let mut pr = PacketReader {
-            read: Cursor::new(data),
+            read: BufReader::new(Cursor::new(data)),
         };
 
         let mut header = [0u8; 12];
@@ -143,17 +143,20 @@ mod tests {
         println!("{:?}", header);
 
         let s = pr.read_name().unwrap();
-        println!("qname: {}", s);
+        assert_eq!("baidu.com", s);
+        println!("position1 {}", pr.read.stream_position().unwrap());
 
-        pr.read.consume(4);
-
-        let s = pr.read_name().unwrap();
-        println!("name {}", s);
-
-        pr.read.consume(14);
+        pr.read.read_exact(&mut [0u8; 4]).unwrap();
 
         let s = pr.read_name().unwrap();
-        println!("name {}", s);
+        assert_eq!("baidu.com", s);
+        println!("position2 {}", pr.read.stream_position().unwrap());
+
+        pr.read.read_exact(&mut [0u8; 14]).unwrap();
+
+        let s = pr.read_name().unwrap();
+        assert_eq!("baidu.com", s);
+        println!("position3 {}", pr.read.stream_position().unwrap());
     }
 
     #[test]
