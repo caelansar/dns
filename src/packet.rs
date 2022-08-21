@@ -1,11 +1,22 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    ops::Deref,
+};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct PacketReader<R> {
     pub read: R,
+}
+
+impl<R: Read> Deref for PacketReader<R> {
+    type Target = R;
+
+    fn deref(&self) -> &Self::Target {
+        &self.read
+    }
 }
 
 impl<R: Read + Seek> PacketReader<R> {
@@ -93,6 +104,14 @@ pub struct PacketWriter<W: Write> {
     pub write: W,
 }
 
+impl<W: Write> Deref for PacketWriter<W> {
+    type Target = W;
+
+    fn deref(&self) -> &Self::Target {
+        &self.write
+    }
+}
+
 impl<W: Write> PacketWriter<W> {
     pub fn new(w: W) -> Self {
         Self { write: w }
@@ -110,13 +129,32 @@ impl<W: Write> PacketWriter<W> {
         Ok(())
     }
 
-    pub fn write_name(&mut self, name: &String) -> Result<()> {
+    pub fn write_u32(&mut self, val: u32) -> Result<()> {
+        self.write.write_u32::<BigEndian>(val)?;
+
+        Ok(())
+    }
+
+    pub fn get_name_len(&self, name: &String) -> usize {
+        let mut size = 0;
+        for part in name.split(".") {
+            size += 1;
+            size += part.as_bytes().len();
+        }
+        size += 1;
+        size
+    }
+
+    pub fn write_name(&mut self, name: &String) -> Result<usize> {
+        let mut size = 0;
         for part in name.split(".") {
             self.write.write_u8(part.len() as u8)?;
-            self.write.write(part.as_bytes())?;
+            size += 1;
+            size += self.write.write(part.as_bytes())?;
         }
+        size += 1;
         self.write.write_u8(0)?;
-        Ok(())
+        Ok(size)
     }
 }
 

@@ -111,7 +111,7 @@ impl DnsHeader {
         Ok(())
     }
 
-    pub fn write<W: Write>(&mut self, buffer: &mut packet::PacketWriter<W>) -> Result<()> {
+    pub fn write<W: Write>(&mut self, buffer: &mut packet::PacketWriter<W>) -> Result<usize> {
         buffer.write_u16(self.id)?;
 
         buffer.write_u8(
@@ -134,7 +134,7 @@ impl DnsHeader {
         buffer.write_u16(self.an_count)?;
         buffer.write_u16(self.ns_count)?;
         buffer.write_u16(self.ar_count)?;
-        Ok(())
+        Ok(12)
     }
 }
 #[derive(PartialEq, Eq, Debug, Clone, Hash, Copy)]
@@ -202,11 +202,12 @@ impl DnsQuestion {
         Ok(())
     }
 
-    pub fn write<W: Write>(&self, buffer: &mut packet::PacketWriter<W>) -> Result<()> {
-        buffer.write_name(&self.name)?;
+    pub fn write<W: Write>(&self, buffer: &mut packet::PacketWriter<W>) -> Result<usize> {
+        let mut size = 0;
+        size += buffer.write_name(&self.name)?;
         buffer.write_u16(self.qtype.to_num())?;
         buffer.write_u16(self.qclass)?;
-        Ok(())
+        Ok(size + 4)
     }
 }
 
@@ -259,7 +260,7 @@ pub enum DnsRecord {
     },
 }
 impl DnsRecord {
-    pub fn read<R: Read + Seek>(buffer: &mut packet::PacketReader<R>) -> Result<DnsRecord> {
+    pub fn read<R: Read + Seek>(buffer: &mut packet::PacketReader<R>) -> Result<Self> {
         let domain = buffer.read_name()?;
 
         let qtype_num = buffer.read_u16()?;
@@ -335,6 +336,101 @@ impl DnsRecord {
             }
         }
     }
+    pub fn write<R: Write>(&self, buffer: &mut packet::PacketWriter<R>) -> Result<usize> {
+        let mut size = 0;
+        match *self {
+            DnsRecord::A {
+                ref domain,
+                ref addr,
+                ttl,
+            } => {
+                size += buffer.write_name(domain)?;
+                buffer.write_u16(QueryType::A.to_num())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+
+                buffer.write_u16(4)?;
+
+                let octets = addr.octets();
+                buffer.write_u8(octets[0])?;
+                buffer.write_u8(octets[1])?;
+                buffer.write_u8(octets[2])?;
+                buffer.write_u8(octets[3])?;
+                size += 14;
+            }
+            DnsRecord::AAAA {
+                ref domain,
+                ref addr,
+                ttl,
+            } => {
+                size += buffer.write_name(domain)?;
+                buffer.write_u16(QueryType::AAAA.to_num())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+
+                buffer.write_u16(16)?;
+                size += 10;
+
+                for octet in &addr.segments() {
+                    buffer.write_u16(*octet)?;
+                    size += 2;
+                }
+            }
+            DnsRecord::NS {
+                ref domain,
+                ref host,
+                ttl,
+            } => {
+                size += buffer.write_name(domain)?;
+                buffer.write_u16(QueryType::NS.to_num())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+                size += 8;
+
+                buffer.write_u16(buffer.get_name_len(host) as u16)?;
+                size += 2;
+                size += buffer.write_name(host)?;
+            }
+            DnsRecord::CNAME {
+                ref domain,
+                ref host,
+                ttl,
+            } => {
+                size += buffer.write_name(domain)?;
+                buffer.write_u16(QueryType::CNAME.to_num())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+                size += 8;
+
+                buffer.write_u16(buffer.get_name_len(host) as u16)?;
+                size += 2;
+                size += buffer.write_name(host)?;
+            }
+            DnsRecord::MX {
+                ref domain,
+                priority,
+                ref host,
+                ttl,
+            } => {
+                size += buffer.write_name(domain)?;
+                buffer.write_u16(QueryType::MX.to_num())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+                size += 8;
+
+                buffer.write_u16(buffer.get_name_len(host) as u16 + 2)?;
+                size += 4;
+
+                buffer.write_u16(priority)?;
+                size += 2;
+                size += buffer.write_name(host)?;
+            }
+            _ => {
+                println!("unknown record: {:?}", self);
+            }
+        }
+        Ok(size)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct DnsPacket {
@@ -382,17 +478,27 @@ impl DnsPacket {
         Ok(result)
     }
 
-    pub fn write<W: Write>(&mut self, buffer: &mut packet::PacketWriter<W>) -> Result<()> {
+    pub fn write<W: Write>(&mut self, buffer: &mut packet::PacketWriter<W>) -> Result<usize> {
+        let mut size = 0;
         self.header.qd_count = self.questions.len() as u16;
         self.header.an_count = self.answers.len() as u16;
         self.header.ar_count = self.resources.len() as u16;
         self.header.ns_count = self.authorities.len() as u16;
-        self.header.write(buffer)?;
+        size += self.header.write(buffer)?;
 
         for question in &self.questions {
-            question.write(buffer)?;
+            size += question.write(buffer)?;
+        }
+        for rec in &self.answers {
+            size += rec.write(buffer)?;
+        }
+        for rec in &self.authorities {
+            size += rec.write(buffer)?;
+        }
+        for rec in &self.resources {
+            size += rec.write(buffer)?;
         }
 
-        Ok(())
+        Ok(size)
     }
 }
