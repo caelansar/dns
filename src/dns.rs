@@ -501,4 +501,66 @@ impl DnsPacket {
 
         Ok(size)
     }
+
+    /// whether there is A record
+    pub fn have_a(&self) -> bool {
+        self.answers
+            .iter()
+            .filter(|record| match record {
+                DnsRecord::A { .. } => true,
+                _ => false,
+            })
+            .count()
+            > 0
+    }
+
+    /// get first A record from a packet
+    pub fn get_first_a(&self) -> Option<Ipv4Addr> {
+        self.answers.iter().find_map(|record| match record {
+            DnsRecord::A { addr, .. } => Some(*addr),
+            _ => None,
+        })
+    }
+
+    /// get first CNAME record from a packet
+    pub fn get_first_cname(&self) -> Option<String> {
+        self.answers.iter().find_map(|record| match record {
+            DnsRecord::CNAME { host, .. } => Some(host.to_owned()),
+            _ => None,
+        })
+    }
+
+    /// returns an iterator over all name servers in the authorities section,
+    /// represented as (domain, host) tuples
+    fn get_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> {
+        self.authorities
+            .iter()
+            .filter_map(|record| match record {
+                DnsRecord::NS { domain, host, .. } => Some((domain.as_str(), host.as_str())),
+                _ => None,
+            })
+            .filter(move |(domain, _)| qname.ends_with(*domain))
+    }
+
+    /// assume that name servers often bundle the corresponding A records
+    /// get it from resources section
+    pub fn get_resolved_ns(&self, qname: &str) -> Option<Ipv4Addr> {
+        self.get_ns(qname)
+            .flat_map(|(_, host)| {
+                self.resources
+                    .iter()
+                    .filter_map(move |record| match record {
+                        DnsRecord::A { domain, addr, .. } if domain == host => Some(addr),
+                        _ => None,
+                    })
+            })
+            .map(|addr| *addr)
+            .next()
+    }
+
+    /// get the host name of an appropriate name server. because in other cases
+    /// there won't be any A records in the additional section
+    pub fn get_unresolved_ns<'a>(&'a self, qname: &'a str) -> Option<&'a str> {
+        self.get_ns(qname).map(|(_, host)| host).next()
+    }
 }

@@ -1,16 +1,71 @@
 use dns::dns::{DnsPacket, DnsQuestion, QueryType, ResultCode};
 use dns::packet::{PacketReader, PacketWriter};
 use std::io::Cursor;
-use std::net::UdpSocket;
+use std::net::{Ipv4Addr, UdpSocket};
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
-/// Forwarded query to target server
-fn lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
-    // use public DNS
-    let server = ("1.1.1.1", 53);
+/// Recursive lookup name
+fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
+    // starting with a root server
+    // https://www.internic.net/domain/named.root
+    let mut ns = "198.41.0.4".parse::<Ipv4Addr>().unwrap();
 
+    let mut name = qname.to_owned();
+
+    loop {
+        println!("attempting lookup of {:?} {} with ns {}", qtype, name, ns);
+
+        let ns_copy = ns;
+
+        let server = (ns_copy, 53);
+        let response = lookup(name.as_str(), qtype, server)?;
+
+        if !response.answers.is_empty() && response.header.rcode == ResultCode::NOERROR {
+            // if name servers not return any A record, and have CNAME record,
+            // try to lookup it instead.
+            if let Some(cname) = response.get_first_cname() {
+                name = cname;
+                continue;
+            }
+            // find it
+            if response.have_a() {
+                return Ok(response);
+            }
+        }
+
+        // the authoritative name servers telling us that the name doesn't exist.
+        if response.header.rcode == ResultCode::NXDOMAIN {
+            return Ok(response);
+        }
+
+        // fast path: find a new nameserver based on NS and a corresponding A
+        // record in the additional section.
+        if let Some(resolved_ns) = response.get_resolved_ns(name.as_str()) {
+            ns = resolved_ns;
+            continue;
+        }
+
+        // slow path: have to resolve the ip of a NS record.
+        let unresolved_ns = match response.get_unresolved_ns(name.as_str()) {
+            Some(x) => x,
+            None => return Ok(response),
+        };
+
+        // lookup the IP of an name server.
+        let recursive_response = recursive_lookup(&unresolved_ns, QueryType::A)?;
+
+        if let Some(new_ns) = recursive_response.get_first_a() {
+            ns = new_ns;
+        } else {
+            return Ok(response);
+        }
+    }
+}
+
+/// Forwarded query to a delegate name server
+fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsPacket> {
     let socket = UdpSocket::bind(("0.0.0.0", 0))?;
 
     let mut packet = DnsPacket::new();
@@ -34,8 +89,9 @@ fn lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
     socket.recv_from(&mut rv)?;
     let mut buffer = PacketReader::new(Cursor::new(&mut rv));
 
-    println!("response from public DNS: {:?}", buffer.get_ref());
-    DnsPacket::from_buffer(&mut buffer)
+    let packet = DnsPacket::from_buffer(&mut buffer);
+    println!("response from public DNS: {:?}", packet);
+    packet
 }
 
 /// Handle a single incoming packet
@@ -59,7 +115,7 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
     if let Some(question) = request.questions.pop() {
         println!("received query: {:?}", question);
 
-        if let Ok(result) = lookup(&question.name, question.qtype) {
+        if let Ok(result) = recursive_lookup(&question.name, question.qtype) {
             packet.questions.push(question);
             packet.header.rcode = result.header.rcode;
 
@@ -84,7 +140,7 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
         packet.header.rcode = ResultCode::FORMERR;
     }
 
-    let mut w = vec![0; 512];
+    let mut w = vec![0; 4096];
     let mut res_buffer = PacketWriter::new(Cursor::new(&mut w));
 
     let len = packet.write(&mut res_buffer)?;
