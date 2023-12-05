@@ -1,4 +1,3 @@
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
     ops::Deref,
@@ -32,20 +31,23 @@ impl<R: Read + Seek> PacketReader<R> {
 
     // Read a single byte
     pub fn read_u8(&mut self) -> Result<u8> {
-        let b = self.read.read_u8()?;
-        Ok(b)
+        let mut buf = [0u8; 1];
+        self.read.read_exact(&mut buf)?;
+        Ok(u8::from_be_bytes(buf))
     }
 
     // Read 2 bytes
     pub fn read_u16(&mut self) -> Result<u16> {
-        let b = self.read.read_u16::<BigEndian>()?;
-        Ok(b)
+        let mut buf = [0u8; 2];
+        self.read.read_exact(&mut buf)?;
+        Ok(u16::from_be_bytes(buf))
     }
 
     // Read 4 bytes
     pub fn read_u32(&mut self) -> Result<u32> {
-        let b = self.read.read_u32::<BigEndian>()?;
-        Ok(b)
+        let mut buf = [0u8; 4];
+        self.read.read_exact(&mut buf)?;
+        Ok(u32::from_be_bytes(buf))
     }
 
     // Read a name
@@ -118,19 +120,19 @@ impl<W: Write> PacketWriter<W> {
     }
 
     pub fn write_u8(&mut self, val: u8) -> Result<()> {
-        self.write.write_u8(val)?;
+        self.write.write_all(val.to_be_bytes().as_slice())?;
 
         Ok(())
     }
 
     pub fn write_u16(&mut self, val: u16) -> Result<()> {
-        self.write.write_u16::<BigEndian>(val)?;
+        self.write.write_all(val.to_be_bytes().as_slice())?;
 
         Ok(())
     }
 
     pub fn write_u32(&mut self, val: u32) -> Result<()> {
-        self.write.write_u32::<BigEndian>(val)?;
+        self.write.write_all(val.to_be_bytes().as_slice())?;
 
         Ok(())
     }
@@ -148,12 +150,12 @@ impl<W: Write> PacketWriter<W> {
     pub fn write_name(&mut self, name: &String) -> Result<usize> {
         let mut size = 0;
         for part in name.split(".") {
-            self.write.write_u8(part.len() as u8)?;
+            self.write_u8(part.len() as u8)?;
             size += 1;
             size += self.write.write(part.as_bytes())?;
         }
         size += 1;
-        self.write.write_u8(0)?;
+        self.write_u8(0)?;
         Ok(size)
     }
 }
