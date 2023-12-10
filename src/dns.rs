@@ -143,6 +143,7 @@ pub enum QueryType {
     A,
     NS,
     CNAME,
+    SOA,
     MX,
     AAAA,
 }
@@ -154,6 +155,7 @@ impl QueryType {
             QueryType::A => 1,
             QueryType::NS => 2,
             QueryType::CNAME => 5,
+            QueryType::SOA => 6,
             QueryType::MX => 15,
             QueryType::AAAA => 28,
         }
@@ -164,6 +166,7 @@ impl QueryType {
             1 => QueryType::A,
             2 => QueryType::NS,
             5 => QueryType::CNAME,
+            6 => QueryType::SOA,
             15 => QueryType::MX,
             28 => QueryType::AAAA,
             _ => QueryType::UNKNOWN(num),
@@ -258,7 +261,19 @@ pub enum DnsRecord {
         host: String,
         ttl: u32,
     },
+    SOA {
+        domain: String,
+        m_name: String,
+        r_name: String,
+        serial: u32,
+        refresh: u32,
+        retry: u32,
+        expire: u32,
+        minimum: u32,
+        ttl: u32,
+    },
 }
+
 impl DnsRecord {
     pub fn read<R: Read + Seek>(buffer: &mut packet::PacketReader<R>) -> Result<Self> {
         let domain = buffer.read_name()?;
@@ -310,6 +325,28 @@ impl DnsRecord {
                 Ok(DnsRecord::CNAME {
                     domain,
                     host: cname,
+                    ttl,
+                })
+            }
+            QueryType::SOA => {
+                let m_name = buffer.read_name()?;
+                let r_name = buffer.read_name()?;
+
+                let serial = buffer.read_u32()?;
+                let refresh = buffer.read_u32()?;
+                let retry = buffer.read_u32()?;
+                let expire = buffer.read_u32()?;
+                let minimum = buffer.read_u32()?;
+
+                Ok(DnsRecord::SOA {
+                    domain,
+                    m_name,
+                    r_name,
+                    serial,
+                    refresh,
+                    retry,
+                    expire,
+                    minimum,
                     ttl,
                 })
             }
@@ -405,6 +442,33 @@ impl DnsRecord {
                 buffer.write_u16(buffer.get_name_len(host) as u16)?;
                 size += 2;
                 size += buffer.write_name(host)?;
+            }
+            DnsRecord::SOA {
+                ref domain,
+                ref m_name,
+                ref r_name,
+                serial,
+                refresh,
+                retry,
+                expire,
+                minimum,
+                ttl,
+            } => {
+                size += buffer.write_name(domain)?;
+                buffer.write_u16(QueryType::SOA.to_num())?;
+                buffer.write_u16(1)?;
+                buffer.write_u32(ttl)?;
+                size += 8;
+
+                size += buffer.write_name(m_name)?;
+                size += buffer.write_name(r_name)?;
+
+                buffer.write_u32(serial)?;
+                buffer.write_u32(refresh)?;
+                buffer.write_u32(retry)?;
+                buffer.write_u32(expire)?;
+                buffer.write_u32(minimum)?;
+                size += 20;
             }
             DnsRecord::MX {
                 ref domain,
