@@ -2,6 +2,7 @@ use dns::dns::{DnsPacket, DnsQuestion, QueryType, ResultCode};
 use dns::packet::{PacketReader, PacketWriter};
 use std::io::Cursor;
 use std::net::{Ipv4Addr, UdpSocket};
+use std::time::Duration;
 
 type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
@@ -17,9 +18,7 @@ fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
     loop {
         println!("attempting lookup of {:?} {} with ns {}", qtype, name, ns);
 
-        let ns_copy = ns;
-
-        let server = (ns_copy, 53);
+        let server = (ns, 53);
         let response = lookup(name.as_str(), qtype, server)?;
 
         if !response.answers.is_empty() && response.header.rcode == ResultCode::NOERROR {
@@ -68,6 +67,13 @@ fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
 fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsPacket> {
     let socket = UdpSocket::bind(("0.0.0.0", 0))?;
 
+    // would block the execution because the data is
+    // not ready to be read or the operation is not
+    // cannot be completed immediately, so we need
+    // to set read/write timeout
+    socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+    socket.set_write_timeout(Some(Duration::from_secs(1)))?;
+
     let mut packet = DnsPacket::new();
 
     let mut question = DnsQuestion::new();
@@ -115,24 +121,28 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
     if let Some(question) = request.questions.pop() {
         println!("received query: {:?}", question);
 
-        if let Ok(result) = recursive_lookup(&question.name, question.qtype) {
-            packet.questions.push(question);
-            packet.header.rcode = result.header.rcode;
+        match recursive_lookup(&question.name, question.qtype) {
+            Ok(result) => {
+                packet.questions.push(question);
+                packet.header.rcode = result.header.rcode;
 
-            for rec in result.answers {
-                println!("answer: {:?}", rec);
-                packet.answers.push(rec);
+                for rec in result.answers {
+                    println!("answer: {:?}", rec);
+                    packet.answers.push(rec);
+                }
+                for rec in result.authorities {
+                    println!("authority: {:?}", rec);
+                    packet.authorities.push(rec);
+                }
+                for rec in result.resources {
+                    println!("resource: {:?}", rec);
+                    packet.resources.push(rec);
+                }
             }
-            for rec in result.authorities {
-                println!("authority: {:?}", rec);
-                packet.authorities.push(rec);
+            Err(e) => {
+                println!("lookup error: {}", e);
+                packet.header.rcode = ResultCode::SERVFAIL;
             }
-            for rec in result.resources {
-                println!("resource: {:?}", rec);
-                packet.resources.push(rec);
-            }
-        } else {
-            packet.header.rcode = ResultCode::SERVFAIL;
         }
     }
     // make sure that a question is actually present
