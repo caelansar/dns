@@ -53,7 +53,7 @@ fn recursive_lookup(qname: &str, qtype: QueryType) -> Result<DnsPacket> {
         };
 
         // lookup the IP of an name server.
-        let recursive_response = recursive_lookup(&unresolved_ns, QueryType::A)?;
+        let recursive_response = recursive_lookup(unresolved_ns, QueryType::A)?;
 
         if let Some(new_ns) = recursive_response.get_first_a() {
             ns = new_ns;

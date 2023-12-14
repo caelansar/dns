@@ -119,7 +119,7 @@ impl DnsHeader {
                 | ((self.tc as u8) << 1)
                 | ((self.aa as u8) << 2)
                 | (self.opcode << 3)
-                | ((self.qr as u8) << 7) as u8,
+                | ((self.qr as u8) << 7),
         )?;
 
         buffer.write_u8(
@@ -291,7 +291,7 @@ impl DnsRecord {
                     (raw_addr >> 24) as u8,
                     (raw_addr >> 16) as u8,
                     (raw_addr >> 8) as u8,
-                    (raw_addr >> 0) as u8,
+                    (raw_addr) as u8,
                 );
 
                 Ok(DnsRecord::A { domain, addr, ttl })
@@ -303,13 +303,13 @@ impl DnsRecord {
                 let raw_addr4 = buffer.read_u32()?;
                 let addr = Ipv6Addr::new(
                     ((raw_addr1 >> 16) & 0xFFFF) as u16,
-                    ((raw_addr1 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr1) & 0xFFFF) as u16,
                     ((raw_addr2 >> 16) & 0xFFFF) as u16,
-                    ((raw_addr2 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr2) & 0xFFFF) as u16,
                     ((raw_addr3 >> 16) & 0xFFFF) as u16,
-                    ((raw_addr3 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr3) & 0xFFFF) as u16,
                     ((raw_addr4 >> 16) & 0xFFFF) as u16,
-                    ((raw_addr4 >> 0) & 0xFFFF) as u16,
+                    ((raw_addr4) & 0xFFFF) as u16,
                 );
 
                 Ok(DnsRecord::AAAA { domain, addr, ttl })
@@ -570,10 +570,7 @@ impl DnsPacket {
     pub fn have_a(&self) -> bool {
         self.answers
             .iter()
-            .filter(|record| match record {
-                DnsRecord::A { .. } => true,
-                _ => false,
-            })
+            .filter(|record| matches!(record, DnsRecord::A { .. }))
             .count()
             > 0
     }
@@ -618,7 +615,7 @@ impl DnsPacket {
                         _ => None,
                     })
             })
-            .map(|addr| *addr)
+            .cloned()
             .next()
     }
 

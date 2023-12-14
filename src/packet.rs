@@ -137,9 +137,9 @@ impl<W: Write> PacketWriter<W> {
         Ok(())
     }
 
-    pub fn get_name_len(&self, name: &String) -> usize {
+    pub fn get_name_len(&self, name: impl AsRef<str>) -> usize {
         let mut size = 0;
-        for part in name.split(".") {
+        for part in name.as_ref().split('.') {
             size += 1;
             size += part.as_bytes().len();
         }
@@ -147,9 +147,9 @@ impl<W: Write> PacketWriter<W> {
         size
     }
 
-    pub fn write_name(&mut self, name: &String) -> Result<usize> {
+    pub fn write_name(&mut self, name: impl AsRef<str>) -> Result<usize> {
         let mut size = 0;
-        for part in name.split(".") {
+        for part in name.as_ref().split('.') {
             self.write_u8(part.len() as u8)?;
             size += 1;
             size += self.write.write(part.as_bytes())?;
@@ -179,7 +179,7 @@ mod tests {
         };
 
         let mut header = [0u8; 12];
-        pr.read.read(&mut header).unwrap();
+        pr.read.read_exact(&mut header).unwrap();
         println!("{:?}", header);
 
         let s = pr.read_name().unwrap();
@@ -205,7 +205,7 @@ mod tests {
         let w = Cursor::new(&mut v);
         let domain_name = "baidu.com";
         let mut pw = PacketWriter { write: w };
-        pw.write_name(&domain_name.to_string()).unwrap();
+        pw.write_name(domain_name).unwrap();
         assert_eq!(&vec![5, 98, 97, 105, 100, 117, 3, 99, 111, 109, 0], &v);
     }
 }
