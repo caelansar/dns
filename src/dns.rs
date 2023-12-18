@@ -594,13 +594,14 @@ impl DnsPacket {
     /// returns an iterator over all name servers in the authorities section,
     /// represented as (domain, host) tuples
     fn get_ns<'a>(&'a self, qname: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> {
-        self.authorities
-            .iter()
-            .filter_map(|record| match record {
-                DnsRecord::NS { domain, host, .. } => Some((domain.as_str(), host.as_str())),
-                _ => None,
-            })
-            .filter(move |(domain, _)| qname.ends_with(*domain))
+        self.authorities.iter().filter_map(|record| {
+            if let DnsRecord::NS { domain, host, .. } = record {
+                if qname.ends_with(domain) {
+                    return Some((domain.as_str(), host.as_str()));
+                }
+            }
+            None
+        })
     }
 
     /// assume that name servers often bundle the corresponding A records
