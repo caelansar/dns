@@ -570,9 +570,7 @@ impl DnsPacket {
     pub fn have_a(&self) -> bool {
         self.answers
             .iter()
-            .filter(|record| matches!(record, DnsRecord::A { .. }))
-            .count()
-            > 0
+            .any(|record| matches!(record, DnsRecord::A { .. }))
     }
 
     /// get first A record from a packet
