@@ -1,7 +1,10 @@
 use dns::dns::{DnsPacket, DnsQuestion, QueryType, ResultCode};
 use dns::packet::{PacketReader, PacketWriter};
+use std::collections::VecDeque;
 use std::io::Cursor;
-use std::net::{Ipv4Addr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::Builder;
 use std::time::Duration;
 
 type Error = Box<dyn std::error::Error>;
@@ -101,14 +104,7 @@ fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsP
 }
 
 /// Handle a single incoming packet
-fn handle_query(socket: &UdpSocket) -> Result<()> {
-    let mut w = vec![0; 64];
-
-    let (_, src) = socket.recv_from(&mut w)?;
-
-    let mut req_buffer = PacketReader::new(Cursor::new(&mut w));
-    let mut request = DnsPacket::from_buffer(&mut req_buffer)?;
-
+fn handle_request(socket: &UdpSocket, src: SocketAddr, mut request: DnsPacket) -> Result<()> {
     // initialize response packet
     let mut packet = DnsPacket::new();
     // make sure use the same id as request
@@ -156,19 +152,117 @@ fn handle_query(socket: &UdpSocket) -> Result<()> {
     let len = packet.write(&mut res_buffer)?;
     let data = &res_buffer.get_ref()[..len];
 
-    println!("write packet: {:?}", data,);
+    println!("write packet: {:?}", data);
     socket.send_to(data, src)?;
 
     Ok(())
 }
 
-fn main() -> Result<()> {
-    let socket = UdpSocket::bind(("0.0.0.0", 5300))?;
+/// Accepts DNS queries through UDP. Packets are read on a single thread,
+/// and a new thread is spawned to handle the request asynchronously.
+pub struct DnsUdpServer {
+    request_queue: Arc<Mutex<VecDeque<(SocketAddr, DnsPacket)>>>,
+    request_cond: Arc<Condvar>,
+    thread_count: usize,
+}
 
-    loop {
-        match handle_query(&socket) {
-            Ok(_) => println!("handle query success"),
-            Err(e) => eprintln!("error: {}", e),
+impl DnsUdpServer {
+    pub fn new(thread_count: usize) -> DnsUdpServer {
+        DnsUdpServer {
+            request_queue: Arc::new(Mutex::new(VecDeque::new())),
+            request_cond: Arc::new(Condvar::new()),
+            thread_count,
         }
     }
+
+    pub fn run(self) {
+        let socket = UdpSocket::bind(("0.0.0.0", 5300)).unwrap();
+        let mut handlers = Vec::new();
+
+        // spawn
+        for thread_id in 0..self.thread_count {
+            let socket_clone = match socket.try_clone() {
+                Ok(x) => x,
+                Err(e) => {
+                    eprintln!("failed to clone socket: {:?}", e);
+                    continue;
+                }
+            };
+
+            let request_cond = self.request_cond.clone();
+            let request_queue = self.request_queue.clone();
+
+            let name = format!("handler-{}", thread_id);
+            let jh = Builder::new()
+                .name(name)
+                .spawn(move || {
+                    loop {
+                        // 1. acquire lock
+                        // 2. wait on the condition until data is available
+                        // 3. handle request in queue.
+                        let (src, request) = match request_queue
+                            .lock()
+                            .ok()
+                            .and_then(|x| request_cond.wait(x).ok())
+                            .and_then(|mut x| x.pop_front())
+                        {
+                            Some(x) => x,
+                            None => {
+                                unreachable!();
+                            }
+                        };
+                        match handle_request(&socket_clone, src, request) {
+                            Ok(_) => println!("handle query success"),
+                            Err(e) => {
+                                eprintln!("failed to handle request: {}", e);
+                                continue;
+                            }
+                        }
+                    }
+                })
+                .unwrap();
+            handlers.push(jh);
+        }
+
+        // handle incoming dns query request
+        let jh = Builder::new()
+            .name("incoming".into())
+            .spawn(move || {
+                loop {
+                    let mut w = vec![0; 512];
+
+                    let (_, src) = socket.recv_from(&mut w).expect("recv failed");
+
+                    let mut req_buffer = PacketReader::new(Cursor::new(&mut w));
+                    let request =
+                        DnsPacket::from_buffer(&mut req_buffer).expect("parse dns packet failed");
+
+                    // 1. acquire lock
+                    // 2. add request to queue
+                    // 3. notify waiting threads
+                    match self.request_queue.lock() {
+                        Ok(mut queue) => {
+                            queue.push_back((src, request));
+                            self.request_cond.notify_one();
+                        }
+                        Err(e) => {
+                            eprintln!("failed to send UDP request for processing: {}", e);
+                        }
+                    }
+                }
+            })
+            .unwrap();
+        handlers.push(jh);
+
+        handlers.into_iter().for_each(|jh| {
+            let _ = jh.join();
+        })
+    }
+}
+
+fn main() -> Result<()> {
+    let server = DnsUdpServer::new(5);
+    server.run();
+
+    Ok(())
 }
