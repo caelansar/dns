@@ -1,5 +1,6 @@
 use dns::dns::{DnsPacket, DnsQuestion, QueryType, ResultCode};
 use dns::packet::{PacketReader, PacketWriter};
+use rand::{thread_rng, Rng};
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
@@ -84,7 +85,10 @@ fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsP
     question.qtype = qtype;
     question.qclass = 1;
 
-    packet.header.id = 6666;
+    let mut rng = thread_rng();
+    let id: u16 = rng.gen_range(1..=10000);
+
+    packet.header.id = id;
     packet.header.qd_count = 1;
     packet.header.rd = true;
     packet.questions.push(question);
@@ -100,6 +104,11 @@ fn lookup(qname: &str, qtype: QueryType, server: (Ipv4Addr, u16)) -> Result<DnsP
 
     let packet = DnsPacket::from_buffer(&mut buffer);
     println!("response from public DNS: {:?}", packet);
+
+    if let Ok(ref packet) = packet {
+        assert_eq!(packet.header.id, id);
+    }
+
     packet
 }
 
